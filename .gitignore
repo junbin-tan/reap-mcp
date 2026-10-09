@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+.gstack/
+coverage/
+*.log
+.DS_Store
