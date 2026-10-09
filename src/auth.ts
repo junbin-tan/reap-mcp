@@ -9,8 +9,8 @@ export interface AuthorizationMetadata {
   issuer: string;
   authorization_endpoint: string;
   token_endpoint: string;
-  jwks_uri?: string;
-  registration_endpoint?: string;
+  jwks_uri?: string | undefined;
+  registration_endpoint?: string | undefined;
   code_challenge_methods_supported: string[];
   [key: string]: unknown;
 }

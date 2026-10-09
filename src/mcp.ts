@@ -16,14 +16,18 @@ const descriptions: Record<ToolName, string> = {
 
 export function isToolName(value: string): value is ToolName { return Object.hasOwn(inputSchemas, value); }
 
+function jsonSchema(schema: z.ZodType, io: "input" | "output") {
+  return { ...z.record(z.string(), z.json()).parse(z.toJSONSchema(schema, { io })), type: "object" as const };
+}
+
 export function buildMcpServer(commerce: Commerce, identity: Identity): Server {
   const server = new Server({ name: "reap-mcp", version: "0.1.0" }, { capabilities: { tools: {} } });
   server.onerror = () => log("mcp_protocol_error");
   server.setRequestHandler("tools/list", async () => ({
     tools: (Object.keys(inputSchemas) as ToolName[]).map((name) => ({
       name, description: descriptions[name],
-      inputSchema: { ...z.toJSONSchema(inputSchemas[name], { io: "input" }), type: "object" as const },
-      outputSchema: { ...z.toJSONSchema(outputSchemas[name]), type: "object" as const },
+      inputSchema: jsonSchema(inputSchemas[name], "input"),
+      outputSchema: jsonSchema(outputSchemas[name], "output"),
       annotations: {
         readOnlyHint: name === "search_products" || name === "get_purchase_status",
         destructiveHint: name === "request_purchase", openWorldHint: true,
