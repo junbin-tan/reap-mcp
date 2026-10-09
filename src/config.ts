@@ -22,6 +22,7 @@ const environment = z.object({
   ALLOWED_COUNTRIES: z.string().default("US"),
   ALLOWED_CURRENCIES: z.string().default("USD"),
   ALLOWED_MERCHANTS: z.string().default('{"mock-coffee":"Mock Coffee Roasters"}'),
+  ALLOW_ALL_MERCHANTS: bool,
   PURCHASE_CAPS: z.string().min(1),
   CATALOG_URL_HOSTS: z.string().default(""),
   REAP_BASE_URL: z.url().default("https://sg.sandbox.api.reap.global"),
@@ -90,7 +91,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     merchants = z.record(z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/), z.string().trim().min(1).max(150)).parse(JSON.parse(e.ALLOWED_MERCHANTS));
     caps = z.record(z.string(), z.string().regex(decimal)).parse(JSON.parse(e.PURCHASE_CAPS));
   } catch { fail("ALLOWED_MERCHANTS / PURCHASE_CAPS JSON"); }
-  if (!Object.keys(merchants).length || currencies.some((currency) => !caps[currency] || Number(caps[currency]) <= 0)) fail("PURCHASE_CAPS / ALLOWED_MERCHANTS");
+  if ((!e.ALLOW_ALL_MERCHANTS && !Object.keys(merchants).length) || currencies.some((currency) => !caps[currency] || Number(caps[currency]) <= 0)) fail("PURCHASE_CAPS / ALLOWED_MERCHANTS");
   const hostedHosts = list(e.REAP_HOSTED_URL_HOSTS);
   const catalogHosts = list(e.CATALOG_URL_HOSTS);
   if ([...hostedHosts, ...catalogHosts].some((host) => !/^[a-z0-9.-]+$/.test(host) || host.startsWith(".") || host.endsWith("."))) fail("URL host allowlists (exact hostnames only)");
@@ -110,7 +111,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     mode: e.APP_MODE, publicUrl, local, databaseUrl: e.DATABASE_URL,
     databaseSsl: !loopback.has(databaseUrl.hostname), encryptionKey,
     port: e.PORT, bindHost: e.BIND_HOST, trustProxyHops: e.TRUST_PROXY_HOPS,
-    countries, currencies, merchants, caps, hostedHosts, catalogHosts, origins,
+    countries, currencies, merchants, allowAllMerchants: e.ALLOW_ALL_MERCHANTS, caps, hostedHosts, catalogHosts, origins,
     namespace: e.APP_MODE === "mock" ? "mock:v1" : `sandbox:${e.REAP_PROJECT_REFERENCE}:${reapUrl.hostname}:${e.REAP_API_VERSION}`,
     reap: { baseUrl: reapUrl.origin, apiKey: e.REAP_API_KEY, version: e.REAP_API_VERSION, moneyUnit: e.REAP_MONEY_UNIT,
       checkoutEnabled: e.REAP_CHECKOUT_ENABLED, approvalConfirmed: e.REAP_PER_PURCHASE_APPROVAL_CONFIRMED,

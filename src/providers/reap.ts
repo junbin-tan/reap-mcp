@@ -34,7 +34,7 @@ const wireQuote = z.object({
 const wireEnrollment = z.object({
   id: text, status: text, owner: z.object({ type: z.literal("CLIENT_REFERENCE"), id: text }),
   nextAction: wireRedirect.nullable(),
-  paymentMethod: z.object({ network: z.string().max(30).optional(), last4: z.string().regex(/^\d{4}$/).optional() }).optional(),
+  paymentMethod: z.object({ network: z.string().max(30).optional(), last4: z.string().regex(/^\d{4}$/).optional() }).nullish(),
 });
 const wireCheckout = z.object({
   id: text, status: text, quoteId: text.optional(), enrollmentId: text.nullable().optional(),

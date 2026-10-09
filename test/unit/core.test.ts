@@ -1,5 +1,9 @@
 import { randomBytes } from "node:crypto";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
+import { Commerce } from "../../src/commerce.js";
+import { Database } from "../../src/db.js";
+import { ReapProvider } from "../../src/providers/reap.js";
+import { localIdentity } from "../../src/runtime.js";
 import { loadConfig, validateRemoteConfig } from "../../src/config.js";
 import { money, withinBudget } from "../../src/money.js";
 import { CryptoBox, canonical, safeText, safeUrl } from "../../src/security.js";
@@ -26,6 +30,55 @@ describe("configuration and transport boundaries", () => {
   test("requires an exact resource audience and allowlisted subjects", () => {
     const config = loadConfig({ ...env(), PUBLIC_BASE_URL: "https://commerce.example", OAUTH_ISSUER: "https://auth.example", OAUTH_AUDIENCE: "https://wrong.example/mcp", ALLOWED_SUBJECTS: "alice" });
     expect(() => validateRemoteConfig(config)).toThrow(/OAUTH_AUDIENCE/);
+  });
+});
+
+describe("sandbox provider compatibility", () => {
+  test("accepts a null payment method while enrollment is pending", async () => {
+    const config = loadConfig(env());
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({
+      id: "enrollment-1", status: "REQUIRES_ACTION", owner: { type: "CLIENT_REFERENCE", id: "owner-1" },
+      paymentMethod: null, nextAction: null,
+    }));
+    const provider = new ReapProvider(config, fetcher);
+    await expect(provider.enrollment("enrollment-1")).resolves.toMatchObject({ id: "enrollment-1", masked_label: null, status: "REQUIRES_ACTION" });
+    expect(fetcher).toHaveBeenCalledWith(new URL("https://sg.sandbox.api.reap.global/agentic/enrollments/enrollment-1"), expect.objectContaining({ method: "GET" }));
+  });
+
+  test("allows an empty merchant list only with explicit all-merchant opt-in", () => {
+    expect(() => loadConfig({ ...env(), ALLOWED_MERCHANTS: "{}" })).toThrow(/ALLOWED_MERCHANTS/);
+    expect(loadConfig({ ...env(), ALLOWED_MERCHANTS: "{}", ALLOW_ALL_MERCHANTS: "true" })).toHaveProperty("allowAllMerchants", true);
+    expect(() => loadConfig({ ...env(), ALLOW_ALL_MERCHANTS: "true", PURCHASE_CAPS: "{}" })).toThrow(/PURCHASE_CAPS/);
+  });
+
+  test.each([false, true])("keeps unknown merchants filtered unless opted in: %s", async (allowAll) => {
+    const config = loadConfig({ ...env(), ALLOW_ALL_MERCHANTS: String(allowAll) });
+    const db = new Database(config);
+    const identity = localIdentity(config);
+    vi.spyOn(db, "actor").mockResolvedValue({ ...identity, id: "user-1", ownerReference: "owner-1" });
+    vi.spyOn(db, "rateLimit").mockResolvedValue();
+    vi.spyOn(db, "audit").mockResolvedValue();
+    vi.spyOn(db, "query").mockResolvedValue([{ id: "00000000-0000-4000-8000-000000000001" }]);
+    const provider = new ReapProvider(config);
+    const search = vi.spyOn(provider, "search").mockResolvedValue({ products: [{
+      id: "product-1", name: "Coffee", merchant: "Another Coffee Merchant", available: true, image_url: null,
+      price_range: { min: money("18.50", "USD"), max: money("18.50", "USD") }, preview_variant: null,
+    }], warnings: [], next_cursor: null });
+    try {
+      const commerce = new Commerce(db, provider, config);
+      const result = await commerce.call("search_products", { query: "coffee", country: "US", currency: "USD" }, identity);
+      expect(result.ok).toBe(true);
+      expect(result.data?.products).toHaveLength(allowAll ? 1 : 0);
+      if (allowAll) {
+        expect(result.data?.products).toEqual([expect.objectContaining({ merchant: { key: "Another Coffee Merchant", name: "Another Coffee Merchant" } })]);
+        const preferred = await commerce.call("search_products", { query: "coffee", country: "US", currency: "USD", merchant_preference: "Another Coffee Merchant" }, identity);
+        expect(preferred.ok).toBe(true);
+        expect(preferred.data?.products).toHaveLength(1);
+        expect(search).toHaveBeenLastCalledWith(expect.objectContaining({ merchant: "Another Coffee Merchant" }));
+        const other = await commerce.call("search_products", { query: "coffee", country: "US", currency: "USD", merchant_preference: "Different Merchant" }, identity);
+        expect(other.data?.products).toHaveLength(0);
+      }
+    } finally { await db.close(); }
   });
 });
 

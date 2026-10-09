@@ -76,6 +76,7 @@ export class Commerce {
     if (!this.config.countries.includes(country) || !this.config.currencies.includes(currency)) throw new AppError("UNSUPPORTED_REGION_OR_MERCHANT", `Supported countries: ${this.config.countries.join(", ")}; currencies: ${this.config.currencies.join(", ")}.`);
   }
   private merchant(name: string): string {
+    if (this.config.allowAllMerchants) return safeText(name, 150);
     const found = Object.entries(this.config.merchants).find(([, configured]) => configured.toLowerCase() === name.toLowerCase());
     if (!found) throw new AppError("UNSUPPORTED_REGION_OR_MERCHANT", "This merchant is not in the server's verified merchant configuration.");
     return found[0];
@@ -148,7 +149,8 @@ export class Commerce {
 
   private async search(actor: Actor, input: SearchInput): Promise<Envelope> {
     this.region(input.country, input.currency);
-    if (input.merchant_preference && !this.config.merchants[input.merchant_preference]) throw new AppError("UNSUPPORTED_REGION_OR_MERCHANT", "Choose an approved configured merchant key.");
+    const merchant = input.merchant_preference && (this.config.allowAllMerchants ? input.merchant_preference : this.config.merchants[input.merchant_preference]);
+    if (input.merchant_preference && !merchant) throw new AppError("UNSUPPORTED_REGION_OR_MERCHANT", "Choose an approved configured merchant key.");
     if (input.max_item_price) this.inputMoney(input.max_item_price, input.currency);
     const { cursor, ...criteria } = input;
     const contextHash = hash(canonical(criteria));
@@ -160,13 +162,13 @@ export class Commerce {
     }
     const found = await this.provider.search({ query: input.query, country: input.country, currency: input.currency, limit: input.limit,
       ...(input.max_item_price ? { max_item_price: input.max_item_price } : {}),
-      ...(input.merchant_preference ? { merchant: this.config.merchants[input.merchant_preference]! } : {}),
+      ...(merchant ? { merchant } : {}),
       ...(providerCursor ? { cursor: providerCursor } : {}) });
     const warnings = found.warnings.map((value) => safeText(value, 500)).slice(0, 20);
     const products: Record<string, unknown>[] = [];
     for (const product of found.products.slice(0, input.limit)) {
-      const merchantKey = Object.entries(this.config.merchants).find(([, name]) => name.toLowerCase() === product.merchant.toLowerCase())?.[0];
-      if (!merchantKey || (input.merchant_preference && merchantKey !== input.merchant_preference)) {
+      const merchantKey = this.config.allowAllMerchants ? this.merchant(product.merchant) : Object.entries(this.config.merchants).find(([, name]) => name.toLowerCase() === product.merchant.toLowerCase())?.[0];
+      if (!merchantKey || (merchant && product.merchant.toLowerCase() !== merchant.toLowerCase())) {
         warnings.push("A result outside the configured merchant allowlist was omitted.");
         continue;
       }

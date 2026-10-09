@@ -26,7 +26,7 @@ export const inputSchemas = {
   connect_payment_method: z.strictObject({ payment_method_id: id.optional() }),
   search_products: z.strictObject({
     query: text(300), country, currency, max_item_price: decimalSchema.optional(),
-    merchant_preference: text(64).optional(), limit: z.number().int().min(1).max(10).default(5), cursor: id.optional(),
+    merchant_preference: text(150).describe("Use a merchant key returned by search. In all-merchant mode, the key is the merchant name.").optional(), limit: z.number().int().min(1).max(10).default(5), cursor: id.optional(),
   }),
   prepare_purchase: z.discriminatedUnion("action", [createSchema, shippingSchema]),
   request_purchase: z.strictObject({ purchase_id: id, expected_revision: z.number().int().min(1), payment_method_id: id }),
@@ -46,7 +46,7 @@ export const needsInputSchema = z.strictObject({
   })),
 });
 export type NeededField = z.infer<typeof needsInputSchema>["required_fields"][number];
-const merchantSchema = z.strictObject({ key: text(64), name: text(150) });
+const merchantSchema = z.strictObject({ key: text(150), name: text(150) });
 const selectedOptionsSchema = z.array(z.strictObject({ name: text(150), value: text(300) }));
 const redirectFields = { approval_url: z.url().nullable(), approval_expires_at: z.string().nullable() };
 export const paymentDataSchema = z.strictObject({

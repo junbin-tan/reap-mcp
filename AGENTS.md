@@ -1,0 +1,12 @@
+# Reap MCP development
+
+- Run `npm run check` for typechecking, unit tests, and the build. Claude launches compiled `dist/stdio-main.js`, so rebuild after source changes.
+- The stdio entry point also serves browser callback pages. Each concurrent MCP process needs its own port. Do not run a smoke-test process on the port already owned by Claude.
+- `readEnvironment()` loads the repository-relative `.env`, independently of the working directory. Existing process environment variables take precedence. Claude Code's local MCP registration can therefore override `.env`; inspect its nonsecret settings when diagnosing mock versus sandbox mode.
+- Keep API keys and database/encryption secrets in the private `.env`; do not print them or copy them into MCP registrations.
+- Sandbox configuration requires HTTPS callbacks. A local Cloudflare quick tunnel can forward to the stdio process's loopback HTTP port with `TRUST_PROXY_HOPS=1`. `PUBLIC_BASE_URL` must match the tunnel hostname. Quick tunnels are temporary: keep the tunnel process alive and update the MCP configuration if its URL changes. The stdio process intentionally rejects remote `/mcp` requests.
+- Reap's API reference at https://docs.reap.global/api-reference/overview specifies API version `2025-02-14` and fiat amounts at native currency precision; use `REAP_MONEY_UNIT=major` for this contract. The agentic setup guide requires HTTPS return URLs and user-completed hosted card entry.
+- `REAP_PROJECT_REFERENCE` is this app's persistent namespace label, not a Reap request parameter. Keep it stable for a given sandbox project and distinct when changing projects.
+- `ALLOW_ALL_MERCHANTS=true` explicitly allows merchants returned by Reap; otherwise the configured `ALLOWED_MERCHANTS` map is enforced. All-merchant mode uses merchant names as returned keys/preferences. Region/currency limits, purchase caps, ownership checks, and hosted-URL allowlists remain enforced.
+- Reap enrollment reads may return `paymentMethod: null` before card entry. Do not treat missing card metadata as successful enrollment.
+- Do not mark a local email verified or enable checkout automatically. Enrollment needs an operator-confirmed email and verified hosted-page domains; checkout additionally requires the existing callback, approval, and monetary-unit gates. Smoke tests must not create enrollments, quotes, or checkouts without specific user approval.
