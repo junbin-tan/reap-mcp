@@ -45,7 +45,8 @@ export function buildMcpServer(commerce: Commerce, identity: Identity): Server {
     }
     const label = result.simulated ? `${result.mode} simulation` : "Reap sandbox";
     const summary = result.error?.message ?? result.next_action?.message ?? "Read the structured result for the verified resource state.";
-    return { content: [{ type: "text" as const, text: `[${label}] ${result.status}. ${summary}` }], structuredContent: { ...result }, isError: !result.ok };
+    return { content: [{ type: "text" as const, text: `[${label}] ${result.status}. ${summary}` },
+      { type: "text" as const, text: JSON.stringify(result) }], structuredContent: { ...result }, isError: !result.ok };
   });
   return server;
 }
