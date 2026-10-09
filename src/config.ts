@@ -130,6 +130,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
 
 export type Config = ReturnType<typeof loadConfig>;
 
+export function assertCheckoutEnabled(config: Config, simulated = config.reap.simulate): void {
+  const reap = config.reap;
+  if (!reap.checkoutEnabled || reap.moneyUnit === "unverified" || !reap.returnUrlConfirmed || !config.hostedHosts.length ||
+    (!simulated && (!reap.approvalConfirmed || !reap.approvalVerificationRef))) {
+    throw new AppError("REAP_FEATURE_NOT_ENABLED", "Sandbox checkout is disabled until monetary units, callback behavior, hosted hosts and per-purchase approval are verified for this project. Explicit sandbox simulation is configured separately by the operator.");
+  }
+}
+
 export function validateRemoteConfig(config: Config): void {
   const { issuer, audience, subjects } = config.oauth;
   if (!issuer || !audience || !subjects.length) fail("OAUTH_ISSUER / OAUTH_AUDIENCE / ALLOWED_SUBJECTS");

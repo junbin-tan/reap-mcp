@@ -19,7 +19,6 @@
     "test:db": "vitest run test/integration --maxWorkers=1 --no-file-parallelism",
     "check": "npm run typecheck && npm test && npm run build",
     "db:migrate": "tsx src/migrate.ts",
-    "demo": "tsx scripts/demo.ts",
     "sandbox:check": "tsx scripts/sandbox-check.ts"
   },
   "dependencies": {

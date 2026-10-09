@@ -2,7 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { Decimal } from "decimal.js";
 import { LosslessNumber, parse } from "lossless-json";
 import { z } from "zod";
-import type { Config } from "../config.js";
+import { assertCheckoutEnabled, type Config } from "../config.js";
 import type { Checkout, Details, Enrollment, Provider, ProviderRequest, ProviderResult, Quote, QuoteRequest, Redirect, SearchRequest, SearchResponse, Variant } from "../domain.js";
 import { AppError, contract } from "../errors.js";
 import { currencyDigits, money, type Money } from "../money.js";
@@ -184,19 +184,13 @@ export class ReapProvider implements Provider {
   }
   shippingRequest(id: string, optionId: string): ProviderRequest { return this.build("shipping", `/agentic/quotes/${encodeURIComponent(id)}/shipping-option`, { shippingOptionId: optionId }); }
   checkoutRequest(quoteId: string, enrollmentId: string, callback: string): ProviderRequest {
-    this.checkoutGate();
+    assertCheckoutEnabled(this.config);
     const request = this.build("checkout", "/agentic/checkouts", { quoteId, enrollmentId, presentation: { type: "REDIRECT", returnUrl: callback } });
     if (this.config.reap.simulate) request.headers["X-Simulate-Checkout"] = "COMPLETED";
     return request;
   }
-  private checkoutGate(simulated = this.config.reap.simulate): void {
-    const r = this.config.reap;
-    if (!r.checkoutEnabled || r.moneyUnit === "unverified" || !r.returnUrlConfirmed || !this.config.hostedHosts.length || (!simulated && (!r.approvalConfirmed || !r.approvalVerificationRef))) {
-      throw new AppError("REAP_FEATURE_NOT_ENABLED", "Checkout is disabled until this project's merchant, units, callback and per-purchase hosted approval are verified.");
-    }
-  }
   async execute(request: ProviderRequest, key: string): Promise<ProviderResult> {
-    if (request.kind === "checkout") this.checkoutGate(request.headers["X-Simulate-Checkout"] === "COMPLETED");
+    if (request.kind === "checkout") assertCheckoutEnabled(this.config, request.headers["X-Simulate-Checkout"] === "COMPLETED");
     const allowed = new Set(["Reap-Version", "X-Simulate-Checkout"]);
     contract(Object.keys(request.headers).every((name) => allowed.has(name)));
     contract(!request.headers["X-Simulate-Checkout"] || (request.kind === "checkout" && request.headers["X-Simulate-Checkout"] === "COMPLETED"));

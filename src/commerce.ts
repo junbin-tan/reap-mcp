@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { z } from "zod";
-import type { Config } from "./config.js";
+import { assertCheckoutEnabled, type Config } from "./config.js";
 import { Database } from "./db.js";
 import { checkoutStates, terminalStates, type Actor, type Checkout, type Delivery, type Enrollment, type Identity, type Operation, type PaymentMethod, type PrivatePurchase, type Provider, type ProviderResult, type Purchase, type Quote, type Redirect, type Selection } from "./domain.js";
 import { AppError, asAppError, contract, log } from "./errors.js";
@@ -300,12 +300,7 @@ export class Commerce {
   }
 
   assertSandboxCheckout(): void {
-    if (this.config.mode === "mock") return;
-    const reap = this.config.reap;
-    if (!reap.checkoutEnabled || reap.moneyUnit === "unverified" || !reap.returnUrlConfirmed || !this.config.hostedHosts.length ||
-      (!reap.simulate && (!reap.approvalConfirmed || !reap.approvalVerificationRef))) {
-      throw new AppError("REAP_FEATURE_NOT_ENABLED", "Sandbox checkout is disabled until monetary units, callback behavior, hosted hosts and per-purchase approval are verified for this project. Explicit sandbox simulation is configured separately by the operator.");
-    }
+    if (this.config.mode === "sandbox") assertCheckoutEnabled(this.config);
   }
 
   private async request(actor: Actor, input: z.infer<typeof inputSchemas.request_purchase>): Promise<Envelope> {

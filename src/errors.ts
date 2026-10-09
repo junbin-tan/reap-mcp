@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 export class AppError extends Error {
   readonly traceId = randomUUID();
   data: Record<string, unknown> | null = null;
-  simulated: boolean | null = null;
   retryAfterMs = 5000;
 
   constructor(

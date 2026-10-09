@@ -1,7 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { describe, expect, test, vi } from "vitest";
 import { checkSandbox, parseCheckArgs } from "../../scripts/sandbox-check.js";
+import { Commerce } from "../../src/commerce.js";
 import { loadConfig } from "../../src/config.js";
+import { Database } from "../../src/db.js";
+import type { ProviderRequest } from "../../src/domain.js";
 import { ReapProvider } from "../../src/providers/reap.js";
 
 const config = (overrides: NodeJS.ProcessEnv = {}) => loadConfig({
@@ -87,6 +90,39 @@ describe("payment API contracts with stubbed HTTP only", () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response({ error: { code, detail: "private-upstream-data" } }, Number(status)));
     await expect(new ReapProvider(config(), fetcher).checkout("checkout-1")).rejects.toMatchObject({ code: expected });
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("checkout gates without network access", () => {
+  const enabled = { REAP_CHECKOUT_ENABLED: "true", REAP_RETURN_URL_CONFIRMED: "true",
+    REAP_PER_PURCHASE_APPROVAL_CONFIRMED: "true", REAP_APPROVAL_VERIFICATION_REF: "test-contract" };
+
+  test.each([
+    { REAP_CHECKOUT_ENABLED: "false" }, { REAP_MONEY_UNIT: "unverified" }, { REAP_RETURN_URL_CONFIRMED: "false" },
+    { REAP_HOSTED_URL_HOSTS: "" }, { REAP_PER_PURCHASE_APPROVAL_CONFIRMED: "false" }, { REAP_APPROVAL_VERIFICATION_REF: "" },
+  ])("enforces every prerequisite during commerce, request construction, and replay: %j", async (override) => {
+    const settings = config({ ...enabled, ...override });
+    const fetcher = vi.fn<typeof fetch>();
+    const provider = new ReapProvider(settings, fetcher);
+    const db = new Database(settings);
+    const request: ProviderRequest = { kind: "checkout", method: "POST", path: "/agentic/checkouts", body: "{}", headers: { "Reap-Version": settings.reap.version } };
+    try {
+      expect(() => new Commerce(db, provider, settings).assertSandboxCheckout()).toThrow(expect.objectContaining({ code: "REAP_FEATURE_NOT_ENABLED" }));
+      expect(() => provider.checkoutRequest("quote-1", "enrollment-1", "https://callback.example")).toThrow(expect.objectContaining({ code: "REAP_FEATURE_NOT_ENABLED" }));
+      await expect(provider.execute(request, "stable-key")).rejects.toMatchObject({ code: "REAP_FEATURE_NOT_ENABLED" });
+      expect(fetcher).not.toHaveBeenCalled();
+    } finally { await db.close(); }
+  });
+
+  test("current simulation settings never authorize replay of a non-simulated request", async () => {
+    const settings = config({ ...enabled, SANDBOX_SIMULATE_CHECKOUT: "true", REAP_PER_PURCHASE_APPROVAL_CONFIRMED: "false", REAP_APPROVAL_VERIFICATION_REF: "" });
+    const fetcher = vi.fn<typeof fetch>();
+    const provider = new ReapProvider(settings, fetcher);
+    const request = provider.checkoutRequest("quote-1", "enrollment-1", "https://callback.example");
+    expect(request.headers["X-Simulate-Checkout"]).toBe("COMPLETED");
+    delete request.headers["X-Simulate-Checkout"];
+    await expect(provider.execute(request, "original-real-request-key")).rejects.toMatchObject({ code: "REAP_FEATURE_NOT_ENABLED" });
+    expect(fetcher).not.toHaveBeenCalled();
   });
 });
 

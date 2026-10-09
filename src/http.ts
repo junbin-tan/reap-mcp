@@ -1,10 +1,9 @@
-import { randomBytes } from "node:crypto";
 import express, { type ErrorRequestHandler, type NextFunction, type Request, type Response } from "express";
 import { createMcpHandler } from "@modelcontextprotocol/server";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { challenge, resourceMetadata, type AuthorizationMetadata, type TokenVerifier } from "./auth.js";
 import { Commerce, requiredScopes } from "./commerce.js";
-import type { Identity, Checkout, Enrollment } from "./domain.js";
+import type { Identity } from "./domain.js";
 import { AppError, asAppError, log } from "./errors.js";
 import { buildMcpServer, isToolName } from "./mcp.js";
 import { MockProvider } from "./providers/mock.js";
@@ -61,7 +60,10 @@ export function createHttpApp(commerce: Commerce, options: { verifier?: TokenVer
     response.json({ ok: true, mode: config.mode });
   });
   app.get("/", (_request, response) => {
-    response.type("html").send(page("MCP commerce, not a shopping app", "Connect your assistant to the authenticated /mcp endpoint. For local development, use the stdio command in the README. Purchase state is available through the five MCP tools.", "", config.mode === "mock"));
+    const message = options.remote
+      ? "Connect your assistant to the authenticated /mcp endpoint. Purchase state is available through the five MCP tools."
+      : "Connect your assistant through stdio as described in the README. This server provides browser callback pages. The HTTP /mcp endpoint is disabled in this process.";
+    response.type("html").send(page("MCP commerce, not a shopping app", message, "", config.mode === "mock"));
   });
 
   const authenticate = async (request: Request): Promise<Identity> => {
@@ -100,7 +102,7 @@ export function createHttpApp(commerce: Commerce, options: { verifier?: TokenVer
       Object.assign(request, { auth: { token: bearer(request)!, clientId: identity.subject, scopes: [...identity.scopes], resource: new URL(config.oauth.audience), extra: { identity } } });
       await node(request, response, request.body);
     });
-  } else app.all("/mcp", (_request, response) => { response.status(503).json({ error: "remote_mcp_disabled", message: "This process serves local mock pages only. Use stdio, or start the OAuth-configured HTTP entry point." }); });
+  } else app.all("/mcp", (_request, response) => { response.status(503).json({ error: "remote_mcp_disabled", message: "This process serves browser callback pages only. Use stdio, or start the OAuth-configured HTTP entry point." }); });
 
   app.get("/status/:purchaseId", async (request, response) => {
     const identity = await authenticate(request);
@@ -135,7 +137,7 @@ export function createHttpApp(commerce: Commerce, options: { verifier?: TokenVer
       };
       app.get(`/mock/${route}/:token`, async (request, response) => {
         const { token, resource } = await verify(request);
-        const value = resource.value as Enrollment | Checkout;
+        const value = resource.value;
         if (value.status !== "REQUIRES_ACTION") { response.type("html").send(page("This simulation has already been handled", "Return to your assistant and check the existing resource. No additional purchase will be submitted.")); return; }
         const nonce = opaqueToken();
         const cookieName = `reap_mock_${hash(token).slice(0, 12)}`;

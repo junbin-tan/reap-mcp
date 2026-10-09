@@ -1,9 +1,12 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { once } from "node:events";
+import type { AddressInfo } from "node:net";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { afterEach, expect, test, vi } from "vitest";
 import { Commerce } from "../../src/commerce.js";
 import { loadConfig } from "../../src/config.js";
 import { Database } from "../../src/db.js";
+import { createHttpApp } from "../../src/http.js";
 import { buildMcpServer } from "../../src/mcp.js";
 import { MockProvider } from "../../src/providers/mock.js";
 import { localIdentity } from "../../src/runtime.js";
@@ -70,6 +73,23 @@ test("unknown tools return a controlled error without dispatching commerce", asy
   expect(result.isError).toBe(true);
   expect(result.structuredContent).toMatchObject({ status: "UNKNOWN_TOOL" });
   expect(call).not.toHaveBeenCalled();
+});
+
+test("local callback pages explain stdio usage and never enable unauthenticated HTTP MCP", async () => {
+  const { commerce } = await fixture();
+  const http = createHttpApp(commerce, { remote: false });
+  const server = http.app.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  close.push(() => http.close(), () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  commerce.config.publicUrl = new URL(base);
+  commerce.config.origins = [base];
+  const page = await fetch(base);
+  expect(page.status).toBe(200);
+  expect(await page.text()).toContain("The HTTP /mcp endpoint is disabled in this process.");
+  const mcp = await fetch(`${base}/mcp`);
+  expect(mcp.status).toBe(503);
+  expect(await mcp.json()).toMatchObject({ error: "remote_mcp_disabled" });
 });
 
 test("Commerce rejects missing scopes without database activity", async () => {

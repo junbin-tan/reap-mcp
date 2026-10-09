@@ -1,10 +1,13 @@
 import { randomBytes } from "node:crypto";
-import { describe, expect, test, vi } from "vitest";
+import type { PoolClient } from "pg";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { Commerce } from "../../src/commerce.js";
 import { Database } from "../../src/db.js";
+import type { Quote } from "../../src/domain.js";
+import { MockProvider } from "../../src/providers/mock.js";
 import { ReapProvider } from "../../src/providers/reap.js";
 import { localIdentity } from "../../src/runtime.js";
-import { loadConfig, validateRemoteConfig } from "../../src/config.js";
+import { loadConfig, validateRemoteConfig, type Config } from "../../src/config.js";
 import { money, withinBudget } from "../../src/money.js";
 import { CryptoBox, canonical, safeText, safeUrl } from "../../src/security.js";
 import { inputSchemas } from "../../src/schemas.js";
@@ -79,6 +82,77 @@ describe("sandbox provider compatibility", () => {
         expect(other.data?.products).toHaveLength(0);
       }
     } finally { await db.close(); }
+  });
+});
+
+describe("mock catalog and quote consistency", () => {
+  const databases: Database[] = [];
+  afterEach(async () => { await Promise.all(databases.splice(0).map((db) => db.close())); });
+
+  function fixture(scenario: Config["mockScenario"] = "success") {
+    const db = new Database(loadConfig({ ...env(), MOCK_SCENARIO: scenario }));
+    databases.push(db);
+    const query = vi.spyOn(db, "query").mockRejectedValue(new Error("Unexpected database access"));
+    return { db, query, provider: new MockProvider(db, db.config) };
+  }
+
+  test("filters mock prices before pagination, including an empty affordable catalog", async () => {
+    const { provider, query } = fixture();
+    const input = { query: "coffee", country: "US", currency: "USD", limit: 1, max_item_price: "12.00" };
+    const page = await provider.search(input);
+    expect(page.products.map((product) => product.id)).toEqual(["mock-mug"]);
+    expect(page.next_cursor).toBeNull();
+    expect((await provider.search({ ...input, max_item_price: "0" })).products).toEqual([]);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  test("uses the same grind labels and availability in details and variants without sharing mutable fixtures", async () => {
+    const { provider } = fixture();
+    const details = await provider.details("mock-beans");
+    const soldOut = details.options[0]!.values.find((value) => value.option_id === "sold-out")!;
+    expect(await provider.variant("mock-beans", [soldOut.option_id])).toMatchObject({
+      name: soldOut.label, options: [{ name: "Grind", value: soldOut.label }], available: false,
+    });
+    details.options[0]!.values[0]!.label = "Changed by a caller";
+    expect((await provider.details("mock-beans")).options[0]!.values[0]!.label).toBe("Whole beans");
+    await expect(provider.variant("mock-beans", ["invalid"])).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+
+  test.each(["changed_price", "shipping"] as const)("keeps raw and normalized totals aligned after %s", async (action) => {
+    const { db, query, provider } = fixture(action === "shipping" ? "success" : action);
+    const quote: Quote = {
+      id: "quote-1", expires_at: new Date(Date.now() + 60_000).toISOString(),
+      shipping_options: [
+        { id: "standard", name: "Standard", selected: true, price: money("4", "USD"), details: [] },
+        { id: "express", name: "Express", selected: false, price: money("9", "USD"), details: [] },
+      ],
+      breakdown: { items_subtotal: money("12", "USD"), shipping: money("4", "USD"), tax: null,
+        discounts: [], additional_charges: [], final_amount: money("16", "USD") },
+      raw_amounts: { final_amount: "16.00" },
+    };
+    const stored = { kind: "quote", value: quote, scenario: db.config.mockScenario, callback: null, quote: null, price_changed: false, reads: 0 };
+    query.mockResolvedValue([{ data_ciphertext: db.box.seal(stored, `mock:${quote.id}`) }]);
+    const client = { query: vi.fn().mockResolvedValue({ rows: [] }) } as unknown as PoolClient;
+    vi.spyOn(db, "locked").mockImplementation(async (_key, work) => work(client));
+    vi.spyOn(db, "transaction").mockImplementation(async (work) => work(client));
+    let updated: Quote;
+    if (action === "shipping") {
+      query.mockResolvedValueOnce([]);
+      const result = await provider.execute(provider.shippingRequest(quote.id, "express"), "stable-shipping-key");
+      if (result.kind !== "quote") throw new Error("Expected a quote result");
+      updated = result.value;
+      expect(updated.shipping_options.find((option) => option.selected)?.id).toBe("express");
+    } else updated = await provider.quote(quote.id);
+    expect(updated.breakdown.final_amount.amount).toBe(action === "shipping" ? "21.00" : "17.00");
+    expect(updated.raw_amounts.final_amount).toBe(updated.breakdown.final_amount.amount);
+  });
+
+  test("rate-limit simulation fails once and then permits the same search", async () => {
+    const { provider, query } = fixture("rate_limit");
+    query.mockResolvedValueOnce([{ requests: 1 }]).mockResolvedValueOnce([{ requests: 2 }]);
+    const input = { query: "coffee", country: "US", currency: "USD", limit: 5 };
+    await expect(provider.search(input)).rejects.toMatchObject({ code: "UPSTREAM_RATE_LIMITED", retryable: true });
+    expect((await provider.search(input)).products).toHaveLength(2);
   });
 });
 

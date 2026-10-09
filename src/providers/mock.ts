@@ -4,22 +4,25 @@ import type { Config } from "../config.js";
 import { Database } from "../db.js";
 import type { Checkout, Details, Enrollment, Provider, ProviderRequest, ProviderResult, Quote, QuoteRequest, SearchRequest, SearchResponse, Variant } from "../domain.js";
 import { AppError, contract } from "../errors.js";
-import { currencyDigits, money } from "../money.js";
+import { currencyDigits, money, withinBudget, type Money } from "../money.js";
 import { canonical, hash, opaqueToken } from "../security.js";
 
-interface StoredResource {
-  kind: "enrollment" | "quote" | "checkout";
-  value: Enrollment | Quote | Checkout;
+type StoredResource = ProviderResult & {
   scenario: Config["mockScenario"];
   callback: string | null;
   quote: Quote | null;
   price_changed: boolean;
   reads: number;
-}
+};
 const merchant = "Mock Coffee Roasters";
 const catalog = [
   { id: "mock-beans", name: "Mock Coffee Beans", price: "18.50", options: true },
   { id: "mock-mug", name: "Mock Ceramic Coffee Mug", price: "12.00", options: false },
+];
+const grindOptions = [
+  { option_id: "whole", label: "Whole beans", available: true },
+  { option_id: "ground", label: "Ground coffee", available: true },
+  { option_id: "sold-out", label: "Espresso grind", available: false },
 ];
 
 export class MockProvider implements Provider {
@@ -43,7 +46,9 @@ export class MockProvider implements Provider {
     }
     const offset = input.cursor ? Number(input.cursor) : 0;
     contract(Number.isSafeInteger(offset) && offset >= 0);
-    const hits = catalog.filter((item) => item.name.toLowerCase().includes(input.query.toLowerCase()) && (!input.merchant || input.merchant === merchant));
+    const hits = catalog.filter((item) => item.name.toLowerCase().includes(input.query.toLowerCase()) &&
+      (!input.merchant || input.merchant === merchant) &&
+      (input.max_item_price === undefined || withinBudget(money(item.price, input.currency), input.max_item_price, null)));
     const selected = hits.slice(offset, offset + input.limit);
     return {
       products: selected.map((item) => ({ id: item.id, name: item.name, merchant, available: true, image_url: null,
@@ -58,24 +63,23 @@ export class MockProvider implements Provider {
     const item = catalog.find((entry) => entry.id === id);
     if (!item) throw new AppError("PRODUCT_UNAVAILABLE", "The mock product is unavailable. Search again.");
     return { id, name: item.name, merchant,
-      options: item.options ? [{ name: "Grind", values: [
-        { option_id: "whole", label: "Whole beans", available: true },
-        { option_id: "ground", label: "Ground coffee", available: true },
-        { option_id: "sold-out", label: "Espresso grind", available: false },
-      ] }] : [], default_variant: this.fixtureVariant(id, "whole", this.config.currencies[0] ?? "USD") };
+      options: item.options ? [{ name: "Grind", values: grindOptions.map((option) => ({ ...option })) }] : [],
+      default_variant: this.fixtureVariant(id, "whole", this.config.currencies[0] ?? "USD") };
   }
 
   async variant(id: string, options: string[]): Promise<Variant> {
-    if (options.length !== 1 || !["whole", "ground", "sold-out"].includes(options[0] ?? "")) throw new AppError("INVALID_INPUT", "Select exactly one of the mock grind options.");
-    return this.fixtureVariant(id, options[0] ?? "whole", this.config.currencies[0] ?? "USD");
+    if (options.length !== 1 || !grindOptions.some((option) => option.option_id === options[0])) throw new AppError("INVALID_INPUT", "Select exactly one of the mock grind options.");
+    return this.fixtureVariant(id, options[0]!, this.config.currencies[0] ?? "USD");
   }
 
   private fixtureVariant(id: string, option: string, currency: string): Variant {
     const item = catalog.find((entry) => entry.id === id);
     if (!item) throw new AppError("PRODUCT_UNAVAILABLE", "Choose a product from the mock catalog.");
-    return { id: `${id}:${option}`, name: item.options ? (option === "ground" ? "Ground coffee" : "Whole beans") : "Standard mug",
-      options: item.options ? [{ name: "Grind", value: option === "ground" ? "Ground coffee" : "Whole beans" }] : [],
-      price: money(item.price, currency), available: option !== "sold-out", requires_shipping: true };
+    const grind = grindOptions.find((entry) => entry.option_id === option);
+    contract(grind);
+    return { id: `${id}:${option}`, name: item.options ? grind.label : "Standard mug",
+      options: item.options ? [{ name: "Grind", value: grind.label }] : [],
+      price: money(item.price, currency), available: grind.available, requires_shipping: true };
   }
 
   private async read(id: string): Promise<StoredResource> {
@@ -86,11 +90,15 @@ export class MockProvider implements Provider {
   private async save(resource: StoredResource): Promise<void> {
     await this.db.query("UPDATE mock_resources SET data_ciphertext=$2 WHERE id=$1 AND namespace=$3", [resource.value.id, this.db.box.seal(resource, `mock:${resource.value.id}`), this.config.namespace]);
   }
+  private setQuoteTotal(quote: Quote, total: Money): void {
+    quote.breakdown.final_amount = total;
+    quote.raw_amounts.final_amount = total.amount;
+  }
 
   async enrollment(id: string): Promise<Enrollment> {
     const stored = await this.read(id);
     contract(stored.kind === "enrollment");
-    const value = stored.value as Enrollment;
+    const value = stored.value;
     if (value.status === "REQUIRES_ACTION" && value.next_action?.expires_at && Date.parse(value.next_action.expires_at) <= Date.now()) {
       value.status = "EXPIRED";
       value.next_action = null;
@@ -102,9 +110,9 @@ export class MockProvider implements Provider {
     return this.db.locked(`mock:${id}`, async () => {
       const stored = await this.read(id);
       contract(stored.kind === "quote");
-      const value = stored.value as Quote;
+      const value = stored.value;
       if (stored.scenario === "changed_price" && !stored.price_changed) {
-        value.breakdown.final_amount = money(new Decimal(value.breakdown.final_amount.amount).plus(1).toFixed(), value.breakdown.final_amount.currency);
+        this.setQuoteTotal(value, money(new Decimal(value.breakdown.final_amount.amount).plus(1).toFixed(), value.breakdown.final_amount.currency));
         stored.price_changed = true;
         await this.save(stored);
       }
@@ -115,7 +123,7 @@ export class MockProvider implements Provider {
     return this.db.locked(`mock:${id}`, async () => {
       const stored = await this.read(id);
       contract(stored.kind === "checkout");
-      const value = stored.value as Checkout;
+      const value = stored.value;
       if (value.status === "REQUIRES_ACTION" && value.next_action?.expires_at && Date.parse(value.next_action.expires_at) <= Date.now()) {
         value.status = "EXPIRED";
         value.next_action = null;
@@ -173,7 +181,7 @@ export class MockProvider implements Provider {
         contract(quoteId);
         const original = await this.read(quoteId);
         contract(original.kind === "quote");
-        const quote = structuredClone(original.value as Quote);
+        const quote = structuredClone(original.value);
         if (Date.parse(quote.expires_at) <= Date.now()) throw new AppError("QUOTE_EXPIRED", "The mock quote expired. Prepare a new draft.");
         const option = quote.shipping_options.find((entry) => entry.id === body.shippingOptionId);
         if (!option) throw new AppError("INVALID_INPUT", "Choose one of the quoted shipping options.");
@@ -181,13 +189,13 @@ export class MockProvider implements Provider {
         quote.id = id;
         quote.shipping_options.forEach((entry) => { entry.selected = entry.id === option.id; });
         quote.breakdown.shipping = option.price;
-        quote.breakdown.final_amount = money(total.toFixed(), option.price.currency);
+        this.setQuoteTotal(quote, money(total.toFixed(), option.price.currency));
         stored = { ...original, value: quote, price_changed: true };
       } else {
         const enrollment = await this.enrollment(String(body.enrollmentId));
         const quoted = await this.read(String(body.quoteId));
         contract(quoted.kind === "quote");
-        const quote = quoted.value as Quote;
+        const quote = quoted.value;
         if (enrollment.status !== "ACTIVE") throw new AppError("PAYMENT_METHOD_NOT_ACTIVE", "Complete mock enrollment before requesting checkout.");
         if (Date.parse(quote.expires_at) <= Date.now()) throw new AppError("QUOTE_EXPIRED", "The mock quote expired. Prepare a new draft.");
         stored = { kind: "checkout", scenario, quote, callback: (body.presentation as { returnUrl: string }).returnUrl, reads: 0, price_changed: false,
@@ -204,21 +212,23 @@ export class MockProvider implements Provider {
     });
   }
 
-  async inspect(token: string, kind: "enrollment" | "checkout"): Promise<StoredResource> {
+  async inspect(token: string, kind: "enrollment" | "checkout"): Promise<Extract<StoredResource, { kind: "enrollment" | "checkout" }>> {
     const [row] = await this.db.query<{ id: string; expires_at: Date }>("SELECT id,expires_at FROM mock_resources WHERE namespace=$1 AND kind=$2 AND access_hash=$3", [this.config.namespace, kind, hash(token)]);
     if (!row || row.expires_at.getTime() <= Date.now()) throw new AppError("FORBIDDEN", "This mock approval link is invalid or expired.");
-    return this.read(row.id);
+    const stored = await this.read(row.id);
+    contract(stored.kind !== "quote" && stored.kind === kind);
+    return stored;
   }
 
   async consent(token: string, kind: "enrollment" | "checkout", approve: boolean): Promise<string> {
     const initial = await this.inspect(token, kind);
     return this.db.locked(`mock:${initial.value.id}`, async () => {
       const stored = await this.inspect(token, kind);
-      const value = stored.value as Enrollment | Checkout;
+      const value = stored.value;
       if (value.status === "REQUIRES_ACTION") {
         value.status = kind === "enrollment" ? (approve ? "ACTIVE" : "FAILED") : (approve && stored.scenario !== "decline" ? "PROCESSING" : "FAILED");
         value.next_action = null;
-        if (kind === "enrollment") (stored.value as Enrollment).masked_label = "Mock card ending 4242";
+        if (stored.kind === "enrollment") stored.value.masked_label = "Mock card ending 4242";
         await this.save(stored);
       }
       contract(stored.callback);

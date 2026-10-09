@@ -71,9 +71,3 @@ export function safeUrl(value: string, config: Config, kind: "hosted" | "catalog
   }
   return url.href;
 }
-
-export function sameSecret(a: string, b: string): boolean {
-  const left = Buffer.from(a);
-  const right = Buffer.from(b);
-  return left.length === right.length && timingSafeEqual(left, right);
-}
