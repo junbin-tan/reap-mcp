@@ -65,20 +65,29 @@ export async function checkSandbox(config: Config, input: unknown, fetcher: type
   };
 }
 
+const usage = "Usage: npm run sandbox:check -- --query coffee --country US --currency USD [--limit 1-10] [--merchant KEY] [--max-item-price AMOUNT] [--product-id ID --option-id ID ...]";
+
+export function parseCheckArgs(args: string[]) {
+  try {
+    return parseArgs({ args, options: {
+      help: { type: "boolean" }, query: { type: "string" }, country: { type: "string" }, currency: { type: "string" },
+      limit: { type: "string" }, merchant: { type: "string" }, "max-item-price": { type: "string" }, "product-id": { type: "string" },
+      "option-id": { type: "string", multiple: true },
+    } }).values;
+  } catch { throw new AppError("INVALID_INPUT", `Unrecognized or incomplete arguments. ${usage}`); }
+}
+
 async function main(): Promise<void> {
-  const { values } = parseArgs({ options: {
-    help: { type: "boolean" }, query: { type: "string" }, country: { type: "string" }, currency: { type: "string" },
-    merchant: { type: "string" }, "max-item-price": { type: "string" }, "product-id": { type: "string" },
-    "option-id": { type: "string", multiple: true },
-  } });
+  const values = parseCheckArgs(process.argv.slice(2));
   if (values.help) {
-    console.log("Usage: npm run sandbox:check -- --query coffee --country US --currency USD [--merchant KEY] [--max-item-price AMOUNT] [--product-id ID --option-id ID ...]\nRequires sandbox environment configuration. Read-only API calls; no database access, recovery, enrollment, quote or checkout writes. Provider product IDs are diagnostic IDs, not MCP product IDs.");
+    console.log(`${usage}\nRequires sandbox environment configuration. Read-only API calls; no database access, recovery, enrollment, quote or checkout writes. Provider product IDs are diagnostic IDs, not MCP product IDs.`);
     return;
   }
   readEnvironment();
   const config = loadConfig();
   const result = await checkSandbox(config, {
     query: values.query, country: values.country, currency: values.currency,
+    ...(values.limit ? { limit: Number(values.limit) } : {}),
     ...(values.merchant ? { merchant_preference: values.merchant } : {}),
     ...(values["max-item-price"] ? { max_item_price: values["max-item-price"] } : {}),
     ...(values["product-id"] ? { product_id: values["product-id"] } : {}),

@@ -119,6 +119,19 @@ test("search pagination binds cursors to criteria and users, and missing options
   expect(await f.db.query("SELECT id FROM purchases WHERE operation_key=$1", [input.operation_key])).toHaveLength(0);
 });
 
+test("search reports each omitted-image warning once per page", async () => {
+  const f = await fixture();
+  const original = f.provider.search.bind(f.provider);
+  vi.spyOn(f.provider, "search").mockImplementation(async (input) => {
+    const found = await original(input);
+    return { ...found, products: found.products.map((product) => ({ ...product, image_url: "https://images.example/item.png" })) };
+  });
+  const data = searchDataSchema.parse((await f.call("search_products", { query: "coffee", country: "US", currency: "USD", limit: 5 })).data);
+  expect(data.products.length).toBeGreaterThan(1);
+  expect(data.products.every((product) => product.image_url === null)).toBe(true);
+  expect(data.warnings.filter((warning) => warning.includes("image URL"))).toHaveLength(1);
+});
+
 test("stale revisions, budgets, inactive enrollment and other owners cannot start checkout", async () => {
   const f = await fixture();
   const inactive = paymentDataSchema.parse((await f.call("connect_payment_method")).data);

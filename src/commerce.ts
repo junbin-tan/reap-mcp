@@ -192,7 +192,7 @@ export class Commerce {
       await this.db.query("INSERT INTO search_cursors (id,user_id,namespace,context_hash,cursor_ciphertext,expires_at) VALUES ($1,$2,$3,$4,$5,now()+interval '30 minutes')", [nextCursor, actor.id, this.config.namespace, contextHash, this.db.box.seal(found.next_cursor, `cursor:${nextCursor}`)]);
     }
     warnings.push("Search prices are indicative and exclude final shipping, tax and other quote adjustments.");
-    return this.ok("READY", { products, warnings, next_cursor: nextCursor, pricing: "INDICATIVE" }, products.length ? null : { type: "REFINE_SEARCH", message: "No supported products matched. Refine the query or choose another approved merchant." });
+    return this.ok("READY", { products, warnings: [...new Set(warnings)], next_cursor: nextCursor, pricing: "INDICATIVE" }, products.length ? null : { type: "REFINE_SEARCH", message: "No supported products matched. Refine the query or choose another approved merchant." });
   }
 
   private inputMoney(value: string, currency: string): void {

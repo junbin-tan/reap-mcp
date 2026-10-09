@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { describe, expect, test, vi } from "vitest";
-import { checkSandbox } from "../../scripts/sandbox-check.js";
+import { checkSandbox, parseCheckArgs } from "../../scripts/sandbox-check.js";
 import { loadConfig } from "../../src/config.js";
 import { ReapProvider } from "../../src/providers/reap.js";
 
@@ -112,5 +112,12 @@ describe("read-only sandbox checker", () => {
     await expect(checkSandbox(config({ APP_MODE: "mock" }), {}, fetcher)).rejects.toMatchObject({ code: "CONFIG_ERROR" });
     await expect(checkSandbox(config(), { query: "coffee", country: "SG", currency: "USD" }, fetcher)).rejects.toMatchObject({ code: "UNSUPPORTED_REGION_OR_MERCHANT" });
     expect(fetcher).not.toHaveBeenCalled();
+  });
+  test("accepts a page-size flag and reports unknown flags as a usage error", async () => {
+    expect(parseCheckArgs(["--query", "coffee", "--limit", "3"])).toMatchObject({ query: "coffee", limit: "3" });
+    expect(() => parseCheckArgs(["--page-size", "3"])).toThrow(expect.objectContaining({ code: "INVALID_INPUT" }));
+    const { fetcher } = setup(search, details);
+    await checkSandbox(config(), { query: "coffee", country: "US", currency: "USD", limit: 3 }, fetcher);
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]!.body))).toMatchObject({ pagination: { limit: 3 } });
   });
 });
